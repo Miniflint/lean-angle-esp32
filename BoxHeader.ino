@@ -115,7 +115,7 @@ void drawGauge(LGFX_Sprite &leanMeter, float roll, uint16_t cx, uint16_t cy)
   leanMeter.setCursor(cx - 3, cy - rOut - (rOut - rIn) - 8);
   leanMeter.print("0");
   
-  float needle = constrain(roll, -75.0f, 75.0f);
+  float needle = constrain(roll, -1.308f, 1.308f);
   int nx = cx + sin(needle) * (rOut - 10);
   int ny = cy - cos(needle) * (rOut - 10);
   leanMeter.drawLine(cx, cy, nx, ny, TFT_YELLOW);

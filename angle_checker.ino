@@ -141,8 +141,12 @@ void loop() {
   if (!bno08x.getSensorEvent(&sensorValue))
   {
     Serial.println("No Sensor Event");
+    lcd.fillScreen(TFT_BLACK);
+    lcd.setCursor(0, WIDTH_DIV);
+    lcd.print("No Sensor Event");
     setReport();
-    delay(100);
+    delay(1000);
+    return ;
   }
   if (bno08x.wasReset())
   {
@@ -163,7 +167,7 @@ void loop() {
       cubeSprite.fillScreen(TFT_BLACK);
       cubeSprite.setCursor(0, 0);
       cubeSprite.print("cube");
-      drawCube(cubeSprite, qw, pitch, yaw, -roll, HEIGHT_DIV >> 1, WIDTH_DIV, 2.2f);
+      drawCube(cubeSprite, qw,  pitch, -yaw, -roll, HEIGHT_DIV >> 1, WIDTH_DIV, 2.2f);
       cubeSprite.pushSprite(0, 0);
       leanMeter.fillScreen(TFT_BLACK);
       leanMeter.setCursor(0, 0);
