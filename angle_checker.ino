@@ -5,12 +5,34 @@
 #define WIDTH 170
 #define HEIGHT_DIV (HEIGHT / 2)
 #define WIDTH_DIV (WIDTH / 2)
-#include <Adafruit_BNO08x.h>
 
-#include <Wire.h>
-#include <string>
+# include <Adafruit_BNO08x.h>
+# include <Wire.h>
+# include <SPI.h>
+# include <SD.h>
+# include <string.h>
+# include <TinyGPS++.h>
+
+#define SD_CS_PIN 5
 #define BNO08X_RESET  -1   // no external reset pin
 #define BNO08X_INT    -1   // no interrupt pin
+
+#define DUMP_SIZE 512
+#define MAX_BUFF_SIZE 552
+
+# define TARGET_HZ 200
+# define DELAY_HZ 1000 / TARGET_HZ
+# define QUERY_BNO 1000000 / TARGET_HZ
+
+#define BNO_ROTATION_VECTOR 0x1
+#define BNO_ACCELEROMETER   0x2
+#define GPS_LONG_LAT        0x4
+
+typedef struct S_buf
+{
+  unsigned char buff[MAX_BUFF_SIZE];
+  uint16_t      len;
+} t_buf;
 
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ST7789 _panel_instance;
@@ -22,10 +44,10 @@ class LGFX : public lgfx::LGFX_Device {
       {
         auto cfg = _bus_instance.config();
         cfg.spi_host = VSPI_HOST;
-        cfg.freq_write = 80000000;
+        cfg.freq_write = 40000000;
         cfg.freq_read = 16000000;
         cfg.pin_mosi = 23;
-        cfg.pin_miso = -1;
+        cfg.pin_miso = 19;
         cfg.pin_sclk = 18;
         cfg.pin_dc = 2;
         _bus_instance.config(cfg);
@@ -55,10 +77,14 @@ class LGFX : public lgfx::LGFX_Device {
     }
 };
 
+
+unsigned long previousMillis = 0;
 LGFX lcd;
 LGFX_Sprite cubeSprite(&lcd);
 LGFX_Sprite leanMeter(&lcd);
 Adafruit_BNO08x bno08x = Adafruit_BNO08x();
+t_buf dump;
+File f;
 sh2_SensorValue_t sensorValue;
 
 void drawCube(LGFX_Sprite &canvas,
@@ -67,7 +93,8 @@ void drawCube(LGFX_Sprite &canvas,
 
 void setReport()
 {
-  bno08x.enableReport(SH2_GAME_ROTATION_VECTOR, 2500);
+  bno08x.enableReport(SH2_GAME_ROTATION_VECTOR, QUERY_BNO);
+  bno08x.enableReport(SH2_LINEAR_ACCELERATION, QUERY_BNO);
 }
 
 void  setCursor_Text_Delay(LGFX &lcd, unsigned int x, unsigned int y, const char *str, float dl)
@@ -75,6 +102,12 @@ void  setCursor_Text_Delay(LGFX &lcd, unsigned int x, unsigned int y, const char
   lcd.setCursor(x, y);
   lcd.print(str);
   delay(dl);
+}
+
+float quaternionToRoll(float w, float x, float y, float z)
+{
+  float sqr = sq(w), sqi = sq(x), sqj = sq(y), sqk = sq(z);
+  return atan2(2.0f*(y*z + x*w), (-sqi - sqj + sqk + sqr));
 }
 
 void setup()
@@ -118,64 +151,130 @@ void setup()
     setCursor_Text_Delay(lcd, 0, 110, "[NOK]\t| Bno08x: Initialisation Failed.", 50);
     setCursor_Text_Delay(lcd, 0, 120, "Please Verify connection, alimentation. or add resistors", 50);
     Serial.println("Erreur : Impossible de trouver le composant BNO08x !");
-    Serial.println("Vérifiez le câblage, l'alimentation, ou essayez d'ajouter une résistance de Pull-Up.");
     delay(1000);
   }
   setCursor_Text_Delay(lcd, 0, 120, "                                                                                ", 0);
-  setCursor_Text_Delay(lcd, 0, 110, "[OK]\t| Bno08x: Initialisation Success.", 100);
+  setCursor_Text_Delay(lcd, 0, 110, "[OK]\t| Bno08x: Initialisation Success.", 50);
+  setCursor_Text_Delay(lcd, 0, 120, "[START]\t| SD: Initialisation Started.", 50);
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH); 
+  while (!SD.begin(SD_CS_PIN)) {
+    setCursor_Text_Delay(lcd, 0, 130, "[NOK]\t| SD: Initialisation Failed.", 50);
+    Serial.println("Erreur : Impossible de trouver le composant de la SD CARD !");
+    delay(1000);
+  }
+  setCursor_Text_Delay(lcd, 0, 130, "[OK] \t| SD: Initialisation Success.            ", 50);
+  SD.remove("/test.txt");
+  setCursor_Text_Delay(lcd, 0, 140, "[OK] \t| SD: Removing old file.            ", 50);
+
+  f = SD.open("/test.txt", FILE_APPEND);
+  if (!f)
+    return ((void)Serial.println("Erreur: n'as pas pu créer le fichier"));
+  setCursor_Text_Delay(lcd, 0, 160, "[OK]\t| SD: Allocation Success.            .", 250);
   lcd.fillScreen(TFT_WHITE);
   cubeSprite.setTextSize(2);
   cubeSprite.setTextColor(TFT_WHITE);
   leanMeter.setTextSize(2);
   leanMeter.setTextColor(TFT_WHITE);
+  memset(dump.buff, 0, MAX_BUFF_SIZE);
+  dump.len = 0;
+
   setReport();
 }
 
-float quaternionToRoll(float w, float x, float y, float z)
+void  addToDump(void *dest, unsigned short len)
 {
-  float sqr = sq(w), sqi = sq(x), sqj = sq(y), sqk = sq(z);
-  return atan2(2.0f*(y*z + x*w), (-sqi - sqj + sqk + sqr));
+  memcpy(dump.buff + dump.len, dest, len);
+  dump.len += len;
+}
+unsigned char counter = 0;
+void  dumpInSdCard(void)
+{
+  size_t written = f.write(dump.buff, DUMP_SIZE);
+  if (written != DUMP_SIZE)
+    return ((void)Serial.println("Erreur: n'as pas pu tout écrire"));
+
+  counter++;
+  if (counter >= 100)
+    {f.flush(), counter = 0;}
+  memcpy(dump.buff, dump.buff + DUMP_SIZE, dump.len - DUMP_SIZE);
+  dump.len -= DUMP_SIZE;
 }
 
 void loop() {
-  if (!bno08x.getSensorEvent(&sensorValue))
-  {
-    Serial.println("No Sensor Event");
-    lcd.fillScreen(TFT_BLACK);
-    lcd.setCursor(0, WIDTH_DIV);
-    lcd.print("No Sensor Event");
-    setReport();
-    delay(1000);
-    return ;
-  }
+  uint8_t checkBnoGps = 0;
   if (bno08x.wasReset())
   {
     Serial.println("bno085 got reset");
     setReport();
     delay(100);
+    return ;
   }
-  switch (sensorValue.sensorId)
+  float qw = 0;
+  float roll = 0;
+  float pitch = 0;
+  float yaw = 0;
+  float accel_x = 0;
+  float accel_y = 0;
+  float accel_z = 0;
+  while (bno08x.getSensorEvent(&sensorValue))
   {
-    case SH2_GAME_ROTATION_VECTOR:
-      float qw = sensorValue.un.gameRotationVector.real;
-      float roll = sensorValue.un.gameRotationVector.i;
-      float pitch = sensorValue.un.gameRotationVector.j;
-      float yaw = sensorValue.un.gameRotationVector.k;
-      float mag = sqrt(qw*qw + roll*roll + pitch*pitch + yaw*yaw);
-      if (mag > 0)
-        qw /= mag; roll /= mag; pitch /= mag; yaw /= mag;
-      cubeSprite.fillScreen(TFT_BLACK);
-      cubeSprite.setCursor(0, 0);
-      cubeSprite.print("cube");
-      drawCube(cubeSprite, qw,  pitch, -yaw, -roll, HEIGHT_DIV >> 1, WIDTH_DIV, 2.2f);
-      cubeSprite.pushSprite(0, 0);
-      leanMeter.fillScreen(TFT_BLACK);
-      leanMeter.setCursor(0, 0);
-      leanMeter.setTextSize(2);
-      leanMeter.print("lean");
-      drawGauge(leanMeter, quaternionToRoll(qw, roll, pitch, yaw), HEIGHT_DIV >> 1, WIDTH_DIV + (54 >> 1));
-      leanMeter.pushSprite(HEIGHT_DIV, 0);
-      break;
+    switch (sensorValue.sensorId)
+    {
+      case SH2_LINEAR_ACCELERATION:
+        accel_x = sensorValue.un.linearAcceleration.x;
+        accel_y = sensorValue.un.linearAcceleration.y;
+        accel_z = sensorValue.un.linearAcceleration.z;
+        checkBnoGps |= BNO_ACCELEROMETER;
+        break;
+      case SH2_GAME_ROTATION_VECTOR:
+        qw = sensorValue.un.gameRotationVector.real;
+        roll = sensorValue.un.gameRotationVector.i;
+        pitch = sensorValue.un.gameRotationVector.j;
+        yaw = sensorValue.un.gameRotationVector.k;
+        //float mag = sqrt(qw*qw + roll*roll + pitch*pitch + yaw*yaw);
+        //if (mag > 0)
+        //{ qw /= mag; roll /= mag; pitch /= mag; yaw /= mag; }
+        //cubeSprite.fillScreen(TFT_BLACK);
+        //cubeSprite.setCursor(0, 0);
+        //cubeSprite.print("cube");
+        //drawCube(cubeSprite, qw, -pitch, yaw, -roll, HEIGHT_DIV >> 1, WIDTH_DIV, 2.2f);
+        //cubeSprite.pushSprite(0, 0);
+        //leanMeter.fillScreen(TFT_BLACK);
+        //leanMeter.setCursor(0, 0);
+        //leanMeter.setTextSize(2);
+        //leanMeter.print("lean");
+        //drawGauge(leanMeter, quaternionToRoll(qw, roll, pitch, yaw), HEIGHT_DIV >> 1, WIDTH_DIV + (54 >> 1));
+        //leanMeter.pushSprite(HEIGHT_DIV, 0);
+        checkBnoGps |= BNO_ROTATION_VECTOR;
+        break;
+    }
+    if (checkBnoGps & (BNO_ROTATION_VECTOR | BNO_ACCELEROMETER))
+    {
+      const unsigned long currMillis = micros();
+      uint16_t diff = currMillis - previousMillis;
+      previousMillis = currMillis;
+      //Serial.printf("%d - %f %f %f %f | %f %f %f\n", diff, qw, pitch, roll, yaw, accel_x, accel_y, accel_z);
+      addToDump(&diff, sizeof(uint16_t));
+      addToDump(&qw, sizeof(float));
+      addToDump(&pitch, sizeof(float));
+      addToDump(&roll, sizeof(float));
+      addToDump(&yaw, sizeof(float));
+      addToDump(&accel_x, sizeof(float));
+      addToDump(&accel_y, sizeof(float));
+      addToDump(&accel_z, sizeof(float));
+      if (dump.len >= MAX_BUFF_SIZE - 1)
+      {
+        memset(dump.buff, 0, MAX_BUFF_SIZE);
+        dump.len = 0;
+        printf("destroying buffer\n");
+      }
+      else if (dump.len >= DUMP_SIZE)
+      {
+        dumpInSdCard();
+        printf("Writing in sd card\n");
+      }
+    }
   }
-  delay(2.5);
+  delay(DELAY_HZ);
 }
