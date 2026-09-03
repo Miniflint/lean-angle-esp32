@@ -1,19 +1,21 @@
-#include <Arduino.h>
-#define LGFX_USE_V1
-#include <LovyanGFX.hpp>
 #define HEIGHT 320
 #define WIDTH 170
 #define HEIGHT_DIV (HEIGHT / 2)
 #define WIDTH_DIV (WIDTH / 2)
 
+#include <Arduino.h>
+#include <LovyanGFX.hpp>
 #include <Adafruit_BNO08x.h>
 #include <Wire.h>
 #include <SPI.h>
-#include <SD.h>
+#include "SdFat.h"
 #include <string>
 #include <TinyGPS++.h>
 #include <ESP32Time.h>
 
+#define SPI_SPEED SD_SCK_MHZ(4)
+
+#define LGFX_USE_V1
 #define SD_CS_PIN 5
 #define SD_MISO_PIN 12
 #define SD_MOSI_PIN 13
@@ -85,23 +87,24 @@ public:
   }
 };
 
-unsigned long previousMillis = 0;
-LGFX lcd;
-LGFX_Sprite cubeSprite(&lcd);
-LGFX_Sprite leanMeter(&lcd);
-Adafruit_BNO08x bno08x = Adafruit_BNO08x();
-t_buf dump;
-File f;
-float latitude = 0;
-float longitude = 0;
-float altitude = 0;
-sh2_SensorValue_t sensorValue;
-unsigned long lastGpsUpdateMicros = 0;
+unsigned long       previousMillis = 0;
+LGFX                lcd;
+LGFX_Sprite         cubeSprite(&lcd);
+LGFX_Sprite         leanMeter(&lcd);
+Adafruit_BNO08x     bno08x = Adafruit_BNO08x();
+t_buf               dump;
+FsFile              f;
+float               latitude = 0;
+float               longitude = 0;
+float               altitude = 0;
+sh2_SensorValue_t   sensorValue;
+unsigned long       lastGpsUpdateMicros = 0;
 const unsigned long GPS_UPDATE_INTERVAL_MICROS = 1000000;  // 1 second in microseconds
-ESP32Time rtc(7200);
-TinyGPSPlus gps;
-HardwareSerial gpsSerial(2); 
-SPIClass sdSPI(HSPI); 
+ESP32Time           rtc(7200);
+TinyGPSPlus         gps;
+HardwareSerial      gpsSerial(2); 
+SPIClass            sdSPI(HSPI);
+SdFs                sd;
 
 void drawCube(LGFX_Sprite &canvas,
               float qw, float qx, float qy, float qz,
@@ -127,51 +130,57 @@ void setup() {
   lcd.init();
   lcd.setRotation(1);
   lcd.invertDisplay(true);
-  setCursor_Text_Delay(lcd, 0, 0, "[START]\t| LCD: Initialisation Started.", 50);
-  setCursor_Text_Delay(lcd, 0, 10, "[OK] \t| LCD: Initialisation Success.", 50);
+  setCursor_Text_Delay(lcd, 0, 0, "[START]\t| LCD: Initialisation Started.", 200);
+  setCursor_Text_Delay(lcd, 0, 10, "[OK] \t| LCD: Initialisation Success.", 200);
 
-  setCursor_Text_Delay(lcd, 0, 20, "[START]\t| Wire: Initialisation Started.", 50);
+  setCursor_Text_Delay(lcd, 0, 20, "[START]\t| Wire: Initialisation Started.", 200);
   if (!Wire.begin()) {
-    setCursor_Text_Delay(lcd, 0, 30, "[NOK]\t| Wire: Initialisation Failed.", 50);
+    setCursor_Text_Delay(lcd, 0, 30, "[NOK]\t| Wire: Initialisation Failed.", 200);
     return;
   }
-  setCursor_Text_Delay(lcd, 0, 30, "[OK] \t| Wire: Initialisation Success.", 50);
+  setCursor_Text_Delay(lcd, 0, 30, "[OK] \t| Wire: Initialisation Success.", 200);
 
-  setCursor_Text_Delay(lcd, 0, 40, "[START]\t| Serial: Initialisation Started.", 50);
+  setCursor_Text_Delay(lcd, 0, 40, "[START]\t| Serial: Initialisation Started.", 200);
   Serial.begin(115200);
-  setCursor_Text_Delay(lcd, 0, 50, "[OK]\t| Serial: Initialisation Success.", 50);
-  setCursor_Text_Delay(lcd, 0, 60, "[START]\t| Sprite Cube: Initialisation Started.", 50);
+  setCursor_Text_Delay(lcd, 0, 50, "[OK]\t| Serial: Initialisation Success.", 200);
+  setCursor_Text_Delay(lcd, 0, 60, "[START]\t| Sprite Cube: Initialisation Started.", 200);
   if (!cubeSprite.createSprite(HEIGHT_DIV, WIDTH)) {
-    setCursor_Text_Delay(lcd, 0, 70, "[NOK]\t| Sprite Cube: Initialisation Failed.", 50);
+    setCursor_Text_Delay(lcd, 0, 70, "[NOK]\t| Sprite Cube: Initialisation Failed.", 200);
     Serial.println(F("Failed to allocate sprite memory"));
     return;
   }
-  setCursor_Text_Delay(lcd, 0, 70, "[OK]\t| Sprite Cube: Initialisation Success.", 50);
-  setCursor_Text_Delay(lcd, 0, 80, "[START]\t| Sprite leanmeter: Initialisation Started.", 50);
+  setCursor_Text_Delay(lcd, 0, 70, "[OK]\t| Sprite Cube: Initialisation Success.", 200);
+  setCursor_Text_Delay(lcd, 0, 80, "[START]\t| Sprite leanmeter: Initialisation Started.", 200);
   if (!leanMeter.createSprite(HEIGHT_DIV, WIDTH)) {
-    setCursor_Text_Delay(lcd, 0, 90, "[NOK]\t| Sprite leanmeter: Initialisation Failed.", 50);
+    setCursor_Text_Delay(lcd, 0, 90, "[NOK]\t| Sprite leanmeter: Initialisation Failed.", 200);
     Serial.println(F("Failed to allocate sprite leanmeter memory"));
     return;
   }
-  setCursor_Text_Delay(lcd, 0, 90, "[OK]\t| Sprite leanmeter: Initialisation Success.", 50);
-  setCursor_Text_Delay(lcd, 0, 100, "[START]\t| Bno08x: Initialisation Started.", 50);
+  setCursor_Text_Delay(lcd, 0, 90, "[OK]\t| Sprite leanmeter: Initialisation Success.", 200);
+  setCursor_Text_Delay(lcd, 0, 100, "[START]\t| Bno08x: Initialisation Started.", 100);
   while (!bno08x.begin_I2C(0x4B)) {
-    setCursor_Text_Delay(lcd, 0, 110, "[NOK]\t| Bno08x: Initialisation Failed.", 50);
-    setCursor_Text_Delay(lcd, 0, 120, "Please Verify connection, alimentation. or add resistors", 50);
+    setCursor_Text_Delay(lcd, 0, 110, "[NOK]\t| Bno08x: Initialisation Failed.", 200);
+    setCursor_Text_Delay(lcd, 0, 120, "Please Verify connection, alimentation. or add resistors", 200);
     Serial.println("Erreur : Impossible de trouver le composant BNO08x !");
     delay(1000);
   }
-  setCursor_Text_Delay(lcd, 0, 120, "                                                                                ", 0);
-  setCursor_Text_Delay(lcd, 0, 110, "[OK]\t| Bno08x: Initialisation Success.", 50);
-  setCursor_Text_Delay(lcd, 0, 120, "[START]\t| SD: Initialisation Started.", 50);
+  setCursor_Text_Delay(lcd, 0, 120, "                                                                                ", 200);
+  setCursor_Text_Delay(lcd, 0, 110, "[OK]\t| Bno08x: Initialisation Success.", 200);
+  setCursor_Text_Delay(lcd, 0, 120, "[START]\t| SD: Initialisation Started.", 200);
 
-  // Initialize VSPI explicitly
-  sdSPI.begin(SD_CLK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-
-  delay(100);
-
-  while (!SD.begin(SD_CS_PIN, sdSPI)) {
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+  delay(50);
+  sdSPI.begin(SD_CLK_PIN, SD_MISO_PIN, SD_MOSI_PIN);
+  delay(1000);
+  while (!sd.begin(SdSpiConfig(SD_CS_PIN, SHARED_SPI, SPI_SPEED, &sdSPI))) {
     setCursor_Text_Delay(lcd, 0, 130, "[NOK]\t| SD: Initialisation Failed.", 50);
+    Serial.println("\n====== SD CARD INITIALIZATION FAILED ======");
+    sd.initErrorPrint(&Serial); // <-- Prints exact error message and code
+    
+    Serial.print("SdFat Version: ");
+    Serial.println(SD_FAT_VERSION);
+    Serial.println("===========================================\n");
     Serial.println("Erreur : Impossible de trouver le composant de la SD CARD !");
     delay(1000);
   }
@@ -205,12 +214,12 @@ void setup() {
     date[4] = gps.time.minute();
     date[5] = gps.time.second();
     memset(filename, 0, 32);
-    snprintf(filename, 22, "/%d_%d_%d_%d_%d_%d\0", date[0], date[1], date[2], date[3], date[4], date[5]);
+    snprintf(filename, sizeof(filename), "/%04d_%02d_%02d_%02d_%02d_%02d.txt", date[0], date[1], date[2], date[3], date[4], date[5]);
     lcd.setCursor(0, 150);
     lcd.println(filename);
   }
   rtc.setTime(date[5], date[4], date[3], date[2], date[1], date[0]);
-  f = SD.open(filename, FILE_APPEND);
+  f = sd.open(filename, O_WRITE | O_CREAT | O_APPEND);
   if (!f) {
     Serial.println("could not create the file");
     setCursor_Text_Delay(lcd, 0, 160, "[NOK]\t| SD: n'as pas pu créer le fichier.            .", 250);
@@ -229,22 +238,40 @@ void setup() {
 }
 
 void addToDump(void *dest, unsigned short len) {
+  if (dump.len + len > MAX_BUFF_SIZE) {
+    Serial.println("Warning: Buffer overflow! Data dropped because SD write is slow.");
+    return; 
+  }
+
   memcpy(dump.buff + dump.len, dest, len);
   dump.len += len;
 }
+
 unsigned char counter = 0;
 void dumpInSdCard(void) {
+  if (dump.len < DUMP_SIZE) {
+    return;
+  }
+
   size_t written = f.write(dump.buff, DUMP_SIZE);
   if (written != DUMP_SIZE) {
-    memset(dump.buff, 0, DUMP_SIZE);
+    memset(dump.buff, 0, MAX_BUFF_SIZE);
     dump.len = 0;
     return ((void)Serial.println("Erreur: n'as pas pu tout écrire"));
   }
 
   counter++;
-  if (counter >= 10) { f.flush(), counter = 0; }
-  memcpy(dump.buff, dump.buff + DUMP_SIZE, dump.len - DUMP_SIZE);
-  dump.len -= DUMP_SIZE;
+  if (counter >= 10) {
+    f.flush();
+    counter = 0;
+  }
+  int16_t remainingBytes = dump.len - DUMP_SIZE;
+    if (remainingBytes > 0) {
+    memmove(dump.buff, dump.buff + DUMP_SIZE, remainingBytes);
+    dump.len = remainingBytes;
+  } else {
+    dump.len = 0;
+  }
 }
 
 void loop() {
@@ -255,6 +282,7 @@ void loop() {
     delay(100);
     return;
   }
+
   float qw = 0;
   float roll = 0;
   float pitch = 0;
