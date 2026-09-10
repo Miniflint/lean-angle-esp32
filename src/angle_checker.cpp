@@ -17,15 +17,15 @@
 
 #define LGFX_USE_V1
 #define SD_CS_PIN 5
-#define SD_MISO_PIN 12
+#define SD_MISO_PIN 27
 #define SD_MOSI_PIN 13
 #define SD_CLK_PIN 14
 
 #define BNO08X_RESET -1  // no external reset pin
 #define BNO08X_INT -1    // no interrupt pin
 
-#define DUMP_SIZE 2048
-#define MAX_BUFF_SIZE DUMP_SIZE + 38
+#define DUMP_SIZE 2048U
+#define MAX_BUFF_SIZE DUMP_SIZE + (48U * 2)
 
 #define TARGET_HZ 200
 #define DELAY_HZ 1000 / TARGET_HZ
@@ -47,7 +47,7 @@ typedef struct S_buf {
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ST7789 _panel_instance;
   lgfx::Bus_SPI _bus_instance;
-  lgfx::Light_PWM _light_instance;  // Correction : On utilise une instance de lumière dédiée
+  lgfx::Light_PWM _light_instance;
 
 public:
   LGFX(void) {
@@ -173,7 +173,7 @@ void setup() {
   delay(50);
   sdSPI.begin(SD_CLK_PIN, SD_MISO_PIN, SD_MOSI_PIN);
   delay(1000);
-  while (!sd.begin(SdSpiConfig(SD_CS_PIN, SHARED_SPI, SPI_SPEED, &sdSPI))) {
+  while (!sd.begin(SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SPI_SPEED, &sdSPI))) {
     setCursor_Text_Delay(lcd, 0, 130, "[NOK]\t| SD: Initialisation Failed.", 50);
     Serial.println("\n====== SD CARD INITIALIZATION FAILED ======");
     sd.initErrorPrint(&Serial); // <-- Prints exact error message and code
